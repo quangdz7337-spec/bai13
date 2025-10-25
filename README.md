@@ -30,43 +30,7 @@ Dự án bao gồm 3 task chính:
 
 ---
 
-##  Luồng hoạt động
 
-1. Khi hệ thống khởi động:
-
-   * Cấu hình GPIO cho LED (PA0)
-   * Cấu hình UART1 (PA9: TX, PA10: RX)
-   * Tạo **Queue** và **Mutex**
-
-2. UART gửi dòng dữ liệu ở định dạng:
-
-   ```
-   f,duty
-   ```
-
-   Ví dụ:
-
-   ```
-   5,50
-   ```
-
-   → LED sẽ nhấp nháy 5Hz, duty cycle 50%.
-
-3. Nếu format sai, UART trả về thông báo lỗi:
-
-   ```
-   ERR: Format must be f,duty
-   ```
-
-4. Ngoài ra, mỗi 1 giây, `UART_Print_Task` gửi:
-
-   ```
-   Hello from Task2
-   ```
-
-   để kiểm tra việc đồng bộ UART (mutex).
-
----
 
 ## 📡 Giao tiếp UART
 
