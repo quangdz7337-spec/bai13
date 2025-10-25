@@ -1,0 +1,227 @@
+#include "stm32f10x.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include "semphr.h"
+#include <stdio.h>
+#include <string.h>
+
+#define LED_PIN   GPIO_Pin_0
+#define LED_PORT  GPIOA
+
+typedef struct {
+    uint16_t frequency;   // Hz
+    uint16_t duty_cycle;  // %
+} Signal_t;
+
+QueueHandle_t xSignalQueue;
+SemaphoreHandle_t xUartMutex;   // ?? Mutex b?o v? UART
+
+void GPIO_Config(void);
+void USART1_Config(void);
+void UART_SendString(const char *str);
+int  UART_ReadLine(char *buf, uint16_t maxlen);
+
+void LED_Task(void *pvParameters);
+void UART_Task(void *pvParameters);
+void UART_Print_Task(void *pvParameters);   // Task 2 in UART test Mutex
+
+
+int main(void)
+{
+    SystemInit();
+    GPIO_Config();
+    USART1_Config();
+
+    // T?o queue
+    xSignalQueue = xQueueCreate(5, sizeof(Signal_t));
+
+    // ?? T?o Mutex
+    xUartMutex = xSemaphoreCreateMutex();
+    if (xUartMutex == NULL)
+    {
+        while (1); // l?i t?o Mutex
+    }
+
+    // T?o các Task
+    xTaskCreate(LED_Task,        "LED",   128, NULL, 2, NULL);
+    xTaskCreate(UART_Task,       "UART",  256, NULL, 2, NULL);
+    xTaskCreate(UART_Print_Task, "UART2", 256, NULL, 2, NULL);
+
+    vTaskStartScheduler();
+
+    while (1);
+}
+
+
+void GPIO_Config(void)
+{
+    GPIO_InitTypeDef gpio;
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
+
+    gpio.GPIO_Pin   = LED_PIN;
+    gpio.GPIO_Mode  = GPIO_Mode_Out_PP;
+    gpio.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(LED_PORT, &gpio);
+    GPIO_ResetBits(LED_PORT, LED_PIN);
+}
+
+void USART1_Config(void)
+{
+    GPIO_InitTypeDef gpio;
+    USART_InitTypeDef usart;
+
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_USART1, ENABLE);
+
+    // TX (PA9)
+    gpio.GPIO_Pin   = GPIO_Pin_9;
+    gpio.GPIO_Mode  = GPIO_Mode_AF_PP;
+    gpio.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(GPIOA, &gpio);
+
+    // RX (PA10)
+    gpio.GPIO_Pin   = GPIO_Pin_10;
+    gpio.GPIO_Mode  = GPIO_Mode_IN_FLOATING;
+    GPIO_Init(GPIOA, &gpio);
+
+    // UART setup
+    usart.USART_BaudRate = 9600;
+    usart.USART_WordLength = USART_WordLength_8b;
+    usart.USART_StopBits   = USART_StopBits_1;
+    usart.USART_Parity     = USART_Parity_No;
+    usart.USART_Mode       = USART_Mode_Tx | USART_Mode_Rx;
+    usart.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+
+    USART_Init(USART1, &usart);
+    USART_Cmd(USART1, ENABLE);
+}
+
+void UART_SendString(const char *str)
+{
+    if (xUartMutex != NULL)
+    {
+        if (xSemaphoreTake(xUartMutex, pdMS_TO_TICKS(100)) == pdTRUE)
+        {
+            while (*str)
+            {
+                while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+                USART_SendData(USART1, *str++);
+            }
+            xSemaphoreGive(xUartMutex);
+        }
+    }
+}
+
+
+int UART_ReadLine(char *buf, uint16_t maxlen)
+{
+    uint16_t idx = 0;
+    char c, prev = 0;
+
+    while (idx < maxlen - 1)
+    {
+        if (USART_GetFlagStatus(USART1, USART_FLAG_RXNE) != RESET)
+        {
+            c = (char)USART_ReceiveData(USART1);
+
+            if (idx > 0 && prev == '/' && c == 'n')
+            {
+                buf[idx - 1] = '\0';
+                return idx - 1;
+            }
+
+            if (c == '\r' || c == '\n')
+            {
+                if (idx == 0) continue;
+                buf[idx] = '\0';
+                return idx;
+            }
+
+            buf[idx++] = c;
+            prev = c;
+        }
+        else
+        {
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+    }
+
+    buf[idx] = '\0';
+    return idx;
+}
+
+void LED_Task(void *pvParameters)
+{
+    Signal_t signal;
+    Signal_t defaultSignal = {1, 50};
+
+    TickType_t period, on_time, off_time, start;
+
+    while (1)
+    {
+        if (xQueueReceive(xSignalQueue, &signal, pdMS_TO_TICKS(10)) == pdPASS)
+        {
+            if (signal.frequency == 0) continue;
+            if (signal.frequency > 1000) signal.frequency = 1000;
+
+            period   = pdMS_TO_TICKS(1000 / signal.frequency);
+            on_time  = (period * signal.duty_cycle) / 100;
+            off_time = period - on_time;
+            start    = xTaskGetTickCount();
+
+            while ((xTaskGetTickCount() - start) < pdMS_TO_TICKS(5000))
+            {
+                GPIO_SetBits(LED_PORT, LED_PIN);
+                vTaskDelay(on_time);
+                GPIO_ResetBits(LED_PORT, LED_PIN);
+                vTaskDelay(off_time);
+            }
+        }
+        else
+        {
+            period   = pdMS_TO_TICKS(1000 / defaultSignal.frequency);
+            on_time  = (period * defaultSignal.duty_cycle) / 100;
+            off_time = period - on_time;
+
+            GPIO_SetBits(LED_PORT, LED_PIN);
+            vTaskDelay(on_time);
+            GPIO_ResetBits(LED_PORT, LED_PIN);
+            vTaskDelay(off_time);
+        }
+    }
+}
+
+void UART_Task(void *pvParameters)
+{
+    char buf[32];
+    char msg[64];
+    Signal_t signal;
+
+    UART_SendString("UART Ready\r\n");
+
+    while (1)
+    {
+        if (UART_ReadLine(buf, sizeof(buf)) > 0)
+        {
+            if (sscanf(buf, "%hu,%hu", &signal.frequency, &signal.duty_cycle) == 2)
+            {
+                xQueueSend(xSignalQueue, &signal, 0);
+                sprintf(msg, "OK: %hu Hz, %hu%%\r\n", signal.frequency, signal.duty_cycle);
+                UART_SendString(msg);
+            }
+            else
+            {
+                UART_SendString("ERR: Format must be f,duty\r\n");
+            }
+        }
+    }
+}
+
+void UART_Print_Task(void *pvParameters)
+{
+    while (1)
+    {
+        UART_SendString("Hello from Task2\r\n");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
