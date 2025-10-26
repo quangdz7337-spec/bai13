@@ -1,0 +1,102 @@
+#include "stm32f10x.h"                  // Device header
+#include "FreeRTOS.h"                   // FreeRTOS core
+#include "task.h"                       // FreeRTOS task API
+#include "stm32f10x_usart.h"            // USART driver
+#include "stm32f10x_gpio.h"             // GPIO driver
+#include "stm32f10x_rcc.h"              // RCC driver
+
+
+void uart_init(uint32_t baudrate);
+void uart_send_char(char c);
+void uart_send_string(const char *str);
+void taskA(void *pvParameters);
+void taskB(void *pvParameters);
+
+
+int main(void)
+{
+    SystemInit();
+    uart_init(9600);
+
+    /* Create two FreeRTOS tasks */
+    xTaskCreate(taskA, "TaskA", 128, NULL, 1, NULL);
+    xTaskCreate(taskB, "TaskB", 128, NULL, 1, NULL);
+
+    /* Start the FreeRTOS scheduler */
+    vTaskStartScheduler();
+
+    /* Should never reach here */
+    while (1);
+}
+
+void uart_init(uint32_t baudrate)
+{
+    GPIO_InitTypeDef gpio;
+    USART_InitTypeDef uart;
+
+    /* Enable clocks for GPIOA and USART1 */
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_USART1, ENABLE);
+
+    /* TX (PA9) as Alternate Function Push-Pull */
+    gpio.GPIO_Pin = GPIO_Pin_9;
+    gpio.GPIO_Mode = GPIO_Mode_AF_PP;
+    gpio.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(GPIOA, &gpio);
+
+    /* RX (PA10) as Input Floating */
+    gpio.GPIO_Pin = GPIO_Pin_10;
+    gpio.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+    GPIO_Init(GPIOA, &gpio);
+
+    /* Configure USART1 */
+    uart.USART_BaudRate = baudrate;
+    uart.USART_WordLength = USART_WordLength_8b;
+    uart.USART_StopBits = USART_StopBits_1;
+    uart.USART_Parity = USART_Parity_No;
+    uart.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+    uart.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+
+    USART_Init(USART1, &uart);
+    USART_Cmd(USART1, ENABLE);
+}
+
+
+void uart_send_char(char c)
+{
+    while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+    USART_SendData(USART1, (uint16_t)c);
+}
+
+void uart_send_string(const char *str)
+{
+    while (*str)
+    {
+        uart_send_char(*str++);
+    }
+}
+
+
+void taskA(void *pvParameters)
+{
+    const char *s1 = "11111 2222222222222222222222222222222222\r\n"; 
+    (void) pvParameters;
+
+    while (1)
+    {
+        uart_send_string(s1);
+        vTaskDelay(pdMS_TO_TICKS(500));  /* Delay 500ms */
+    }
+}
+
+
+void taskB(void *pvParameters)
+{
+    const char *s2 = "aaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\r\n";
+    (void) pvParameters;
+
+    while (1)
+    {
+        uart_send_string(s2);
+        vTaskDelay(pdMS_TO_TICKS(500));  /* Delay 500ms */
+    }
+}
